@@ -47,3 +47,86 @@ The system serves as a **research-grade capstone project for Data Analysts** exp
 
 ## 🧠 System Architecture
 
+
+
+User Input → Data Pipeline → Evidence Retrieval
+↓
+Hybrid Reasoning Layer
+(Gemini + GPT-5 + ML Model)
+↓
+Verdict + Explanation + Truth Score
+↓
+Streamlit Dashboard
+
+
+---
+
+## 🧰 Tech Stack
+
+| Layer | Technology |
+|-------|-------------|
+| **Frontend** | Streamlit (Python) |
+| **Backend Reasoning** | Google Gemini 1.5 Pro, OpenAI GPT-5 |
+| **ML Model** | Scikit-learn, XGBoost |
+| **Retrieval APIs** | Google Custom Search JSON API, NewsAPI, GNews |
+| **Scripting / Integration** | Python 3.10+, Requests, dotenv |
+| **Visualization** | Streamlit charts, Matplotlib |
+
+---
+
+## 📦 Project Structure
+
+
+
+
+---
+
+## 🔑 Environment Variables
+
+Create a `.env` file in your project root with the following keys:
+
+```bash
+# Google APIs
+GOOGLE_API_KEY=your_google_api_key_here
+SEARCH_ENGINE_ID=your_cse_id_here
+
+# News APIs (optional)
+NEWS_API_KEY=your_newsapi_key_here
+GNEWS_API_KEY=your_gnews_key_here
+
+# LLM APIs
+GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_gpt5_key_here
+
+
+
+---
+
+## 🔑 Environment Variables
+
+Create a `.env` file in your project root with the following keys:
+
+```bash
+# Google APIs
+GOOGLE_API_KEY=your_google_api_key_here
+SEARCH_ENGINE_ID=your_cse_id_here
+
+# News APIs (optional)
+NEWS_API_KEY=your_newsapi_key_here
+GNEWS_API_KEY=your_gnews_key_here
+
+# LLM APIs
+GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_gpt5_key_here
+
+
+⚙️ Installation & Setup
+1️⃣ Clone the repository
+git clone https://github.com/yourusername/ai-factcheck-dashboard.git
+cd ai-factcheck-dashboard
+2️⃣ Install dependencies
+pip install -r requirements.txt
+3️⃣ Configure environment
+Create .env file with your API keys (see above).
+4️⃣ Run the Streamlit dashboard
+streamlit run dashboard.py
