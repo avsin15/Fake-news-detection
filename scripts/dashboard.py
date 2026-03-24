@@ -7,7 +7,8 @@ Interactive dashboard for Dual-LLM Hybrid Fact-Checker (GPT-5 + Gemini + XGBoost
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from ai_factcheck import hybrid_fact_check, MODEL_STATUS, ML_LOADED
+from ai_factcheck import hybrid_fact_check, get_model_status
+MODEL_STATUS, ML_LOADED = get_model_status()
 
 st.set_page_config(
     page_title="AI Fact-Checker Dashboard", 
