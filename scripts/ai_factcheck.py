@@ -233,7 +233,7 @@ ML_LOADED = False
 
 # Resolve model path relative to this script file, not the working directory
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_MODEL_PATH = os.path.join(_SCRIPT_DIR, "models", "xgboost_model.pkl")
+_MODEL_PATH = os.path.join(_SCRIPT_DIR, "xgboost_model.pkl")
 
 
 def load_ml_model():
