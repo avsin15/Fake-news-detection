@@ -2,18 +2,48 @@
 ai_factcheck.py
 ---------------
 Dual-LLM Hybrid Fact-Checker:
-✅ GPT-5 for recent and real-time events
-✅ Gemini 2.5 Flash for older or general reasoning
-✅ Consensus logic between models
-✅ Fallback reasoning and evidence aggregation
+GPT-5 for recent and real-time events
+Gemini 2.5 Flash for older or general reasoning
+Consensus logic between models
+Fallback reasoning and evidence aggregation
 """
 
-import os, re, json, logging, numpy as np
+"""
+ai_factcheck.py
+---------------
+Dual-LLM Hybrid Fact-Checker
+GPT-5 + Gemini + ML model
+
+Cleaned stable version for capstone demo
+"""
+
+"""
+ai_factcheck.py
+---------------
+Dual-LLM Hybrid Fact-Checker
+
+GPT-5 + Gemini + XGBoost ML
+Evidence-based claim verification
+
+Final stabilized version for capstone demo
+"""
+
+import os
+import re
+import json
+import logging
+import numpy as np
 from dataclasses import dataclass
 from typing import List, Optional
 from dotenv import load_dotenv
 
-# Import from evidence_pipeline (no duplicate definitions)
+from openai import OpenAI
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 from evidence_pipeline import (
     gather_evidence,
     extract_article,
@@ -21,197 +51,232 @@ from evidence_pipeline import (
     EvidenceItem,
 )
 
-# ML Model imports
+# ML imports
 try:
     import joblib
     from sentence_transformers import SentenceTransformer
     ML_AVAILABLE = True
 except ImportError:
     ML_AVAILABLE = False
-    log.warning("⚠️ ML dependencies not available (joblib, sentence-transformers)")
 
-# --- Setup logging ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+def parse_truth_score(value):
+    """
+    Safely convert truth score to integer 0-100
+    """
+    try:
+        value = float(value)
+
+        # handle 0-1 scale
+        if value <= 1:
+            value = value * 100
+
+        value = int(value)
+
+        if value > 100:
+            value = 100
+        if value < 0:
+            value = 0
+
+        return value
+
+    except Exception:
+        return 50
+
+
+def normalize_verdict(verdict):
+    """
+    Convert any LLM verdict to standard format:
+    True / False / Uncertain
+    """
+
+    if isinstance(verdict, bool):
+        return "True" if verdict else "False"
+
+    verdict = str(verdict).strip().lower()
+
+    true_terms = [
+        "true", "correct", "supports", "supported",
+        "accurate", "confirmed", "yes"
+    ]
+
+    false_terms = [
+        "false", "incorrect", "refutes", "refuted",
+        "wrong", "misleading", "no"
+    ]
+
+    uncertain_terms = [
+        "uncertain", "unknown", "mixed",
+        "inconclusive", "partially true"
+    ]
+
+    if verdict in true_terms:
+        return "True"
+
+    if verdict in false_terms:
+        return "False"
+
+    if verdict in uncertain_terms:
+        return "Uncertain"
+
+    return "Uncertain"
+# ------------------------------------------------------------
+# LOGGING
+# ------------------------------------------------------------
+
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("hybrid_factcheck")
 
-# --- Load environment ---
+
+# ------------------------------------------------------------
+# ENVIRONMENT
+# ------------------------------------------------------------
+
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Debug: Check environment
-log.info("🔍 Environment check:")
-log.info(f"   OPENAI_API_KEY: {'✅ Set' if OPENAI_API_KEY else '❌ Missing'}")
-log.info(f"   GEMINI_API_KEY: {'✅ Set' if GEMINI_API_KEY else '❌ Missing'}")
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
-# --- Optional GPT/OpenAI import ---
-client = None
-try:
-    from openai import OpenAI
-    if OPENAI_API_KEY:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        log.info("✅ OpenAI client initialized")
-except ImportError:
-    log.warning("⚠️ OpenAI library not installed (pip install openai)")
-except Exception as e:
-    log.warning(f"⚠️ OpenAI client initialization failed: {e}")
+log.info("Environment check:")
+log.info(f"OPENAI_API_KEY: {'Set' if OPENAI_API_KEY else 'Missing'}")
+log.info(f"GEMINI_API_KEY: {'Set' if GEMINI_API_KEY else 'Missing'}")
 
-# --- Gemini setup ---
-genai = None
-GEMINI_MODEL_NAME = "gemini-2.0-flash-exp"
-try:
-    import google.generativeai as genai
-    if GEMINI_API_KEY:
+
+# ------------------------------------------------------------
+# MODEL STATUS
+# ------------------------------------------------------------
+
+MODEL_STATUS = {
+    "gemini": False,
+    "gpt5": False
+}
+
+
+# ------------------------------------------------------------
+# OPENAI INITIALIZATION
+# ------------------------------------------------------------
+
+openai_client = None
+
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        MODEL_STATUS["gpt5"] = True
+        log.info("OpenAI initialized")
+    except Exception as e:
+        log.warning(f"OpenAI init failed: {e}")
+
+
+# ------------------------------------------------------------
+# GEMINI INITIALIZATION
+# ------------------------------------------------------------
+
+if genai and GEMINI_API_KEY:
+    try:
         genai.configure(api_key=GEMINI_API_KEY)
-        log.info("✅ Gemini configured")
-    else:
-        log.error("❌ GEMINI_API_KEY not set!")
-        genai = None
-except ImportError:
-    log.error("❌ google-generativeai not installed (pip install google-generativeai)")
-    genai = None
-except Exception as e:
-    log.error(f"❌ Gemini configuration failed: {e}")
-    genai = None
+        MODEL_STATUS["gemini"] = True
+        log.info("Gemini initialized")
+    except Exception as e:
+        log.warning(f"Gemini init failed: {e}")
 
 
 # ------------------------------------------------------------
-# ✅ MODEL CONNECTIVITY CHECK
+# CONNECTIVITY TEST
 # ------------------------------------------------------------
+
 def check_model_connectivity():
-    """Test if models are actually reachable"""
-    status = {"gemini": False, "gpt5": False}
-    
-    # --- Gemini test ---
-    if genai and GEMINI_MODEL_NAME:
-        try:
-            test_model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-            resp = test_model.generate_content("ping", 
-                generation_config={"max_output_tokens": 10})
-            if resp and hasattr(resp, "text"):
-                status["gemini"] = True
-                log.info("✅ Gemini connection verified")
-            elif hasattr(resp, "candidates") and resp.candidates:
-                status["gemini"] = True
-                log.info("✅ Gemini connection verified")
-        except Exception as e:
-            log.warning(f"⚠️ Gemini connection failed: {e}")
-    else:
-        log.warning("⚠️ Gemini not configured")
 
-    # --- GPT-5 test ---
-    if client:
+    status = {"gemini": False, "gpt5": False}
+
+    if genai and GEMINI_API_KEY:
         try:
-            log.info("🔍 Testing GPT-5 connection...")
-            resp = client.chat.completions.create(
+            # Use REST-based list_models instead of gRPC generate_content ping
+            # This avoids DNS/gRPC failures on cloud servers
+            models = list(genai.list_models())
+            if models:
+                status["gemini"] = True
+                log.info("Gemini connection verified via REST")
+
+        except Exception as e:
+            log.warning(f"Gemini connection failed: {e}")
+
+    if openai_client:
+        try:
+            resp = openai_client.chat.completions.create(
                 model="gpt-5",
                 messages=[{"role": "user", "content": "ping"}],
-                max_completion_tokens=10
+                max_completion_tokens=5
             )
-            # Check if we got a valid response
-            if resp and resp.choices and len(resp.choices) > 0:
-                content = resp.choices[0].message.content
-                log.info(f"✅ GPT-5 connection verified (response: {content[:20] if content else 'empty'})")
+
+            if resp:
                 status["gpt5"] = True
-            else:
-                log.warning("⚠️ GPT-5 returned empty response")
+                log.info("GPT-5 connection verified")
+
         except Exception as e:
-            log.warning(f"⚠️ GPT-5 connection failed: {e}")
-            log.warning(f"   Error details: {type(e).__name__}: {str(e)}")
-    else:
-        log.warning("⚠️ OpenAI client not initialized")
+            log.warning(f"GPT connection failed: {e}")
 
     return status
 
-# Run connectivity check once on startup
+
 MODEL_STATUS = check_model_connectivity()
 
 
 # ------------------------------------------------------------
-# ✅ ML MODEL LOADING (XGBoost)
+# ML MODEL LOADING
 # ------------------------------------------------------------
+
 ML_MODEL = None
 ML_ENCODER = None
-ML_MODEL_NAME = "all-MiniLM-L6-v2"
+ML_LOADED = False
+
+
+# Resolve model path relative to this script file, not the working directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_MODEL_PATH = os.path.join(_SCRIPT_DIR, "models", "xgboost_model.pkl")
+
 
 def load_ml_model():
-    """Load the trained XGBoost model and SentenceTransformer encoder"""
-    global ML_MODEL, ML_ENCODER
-    
+
+    global ML_MODEL, ML_ENCODER, ML_LOADED
+
     if not ML_AVAILABLE:
-        log.warning("⚠️ ML dependencies not available")
-        return False
-    
-    model_path = "models/xgboost_model.pkl"
-    
-    try:
-        # Load XGBoost model
-        if os.path.exists(model_path):
-            ML_MODEL = joblib.load(model_path)
-            log.info("✅ XGBoost model loaded successfully")
-        else:
-            log.warning(f"⚠️ ML model not found at {model_path}")
-            return False
-        
-        # Load sentence encoder
-        ML_ENCODER = SentenceTransformer(ML_MODEL_NAME)
-        log.info(f"✅ Sentence encoder loaded: {ML_MODEL_NAME}")
-        return True
-        
-    except Exception as e:
-        log.error(f"❌ Failed to load ML model: {e}")
         return False
 
-# Try to load ML model on startup
+    try:
+
+        if os.path.exists(_MODEL_PATH):
+            ML_MODEL = joblib.load(_MODEL_PATH)
+            ML_ENCODER = SentenceTransformer("all-MiniLM-L6-v2")
+
+            ML_LOADED = True
+            log.info("ML model loaded")
+
+    except Exception as e:
+
+        log.warning(f"ML load failed: {e}")
+
+    return ML_LOADED
+
+
 ML_LOADED = load_ml_model()
 
-# Make ML_LOADED available for import
-__all__ = ['hybrid_fact_check', 'MODEL_STATUS', 'ML_LOADED']
 
+# ------------------------------------------------------------
+# DATA STRUCTURES
+# ------------------------------------------------------------
 
-def get_ml_prediction(text: str) -> Optional[float]:
-    """
-    Get ML model prediction (truth probability).
-    Returns probability score between 0-1 (higher = more likely real/true).
-    """
-    if not ML_LOADED or ML_MODEL is None or ML_ENCODER is None:
-        return None
-    
-    try:
-        # Generate embedding
-        embedding = ML_ENCODER.encode([text], convert_to_numpy=True)
-        
-        # Get prediction probabilities
-        # Assuming model outputs: [prob_real, prob_fake, prob_partially_true]
-        proba = ML_MODEL.predict_proba(embedding)[0]
-        
-        # Calculate truth score
-        # Real = 1.0, Partially True = 0.5, Fake = 0.0
-        if len(proba) == 3:
-            truth_score = proba[0] * 1.0 + proba[2] * 0.5 + proba[1] * 0.0
-        elif len(proba) == 2:
-            # Binary: [real, fake]
-            truth_score = proba[0]
-        else:
-            truth_score = proba[0]
-        
-        log.info(f"🤖 ML truth score: {truth_score:.3f}")
-        return float(truth_score)
-        
-    except Exception as e:
-        log.error(f"❌ ML prediction failed: {e}")
-        return None
-
-
-# --- Data structures ---
 @dataclass
 class GeminiResult:
+
     verdict: str
     explanation: str
-    truth_score: Optional[int] = None
+    truth_score: Optional[int]
+
 
 @dataclass
 class HybridResult:
+
     gemini: GeminiResult
     fact_sources: List[EvidenceItem]
     ml_score: Optional[float]
@@ -219,367 +284,236 @@ class HybridResult:
 
 
 # ------------------------------------------------------------
-# Helper: determine if claim references recent (post-2024) data
+# SAFE TRUTH SCORE PARSER
 # ------------------------------------------------------------
-def is_recent_claim(text: str, cutoff_year: int = 2024) -> bool:
-    """
-    Detects whether a claim likely refers to a recent or ongoing event.
-    Used to route reasoning to GPT-5 instead of Gemini.
-    """
-    if not text:
-        return False
 
-    t = text.lower()
+def parse_truth_score(value):
 
-    # 1️⃣ Year detection
-    years = [int(y) for y in re.findall(r"\b(20\d{2})\b", text)]
-    if years and max(years) > cutoff_year:
-        return True
+    try:
 
-    # 2️⃣ Recency keywords
-    recent_terms = [
-        "today", "yesterday", "this week", "last week",
-        "this month", "breaking", "just in", "recently",
-        "new report", "this year", "latest", "2025", "now",
-        "earlier this", "as of", "update", "unfolding", "current"
-    ]
+        value = float(value)
 
-    return any(term in t for term in recent_terms)
+        if value <= 1:
+            value = value * 100
+
+        value = int(value)
+
+        if value > 100:
+            value = 100
+
+        if value < 0:
+            value = 0
+
+        return value
+
+    except Exception:
+
+        return 50
 
 
 # ------------------------------------------------------------
-# GPT and Gemini verdict functions
+# ML PREDICTION
 # ------------------------------------------------------------
-def gpt5_verdict(text: str, evidence_context: str) -> Optional[GeminiResult]:
-    """Get verdict from GPT-5 model"""
-    if not client:
-        log.warning("⚠️ GPT-5 unavailable")
+
+def get_ml_prediction(text):
+
+    if not ML_LOADED:
         return None
 
-    prompt = f"""You are a factual verification assistant analyzing claims in November 2025.
+    try:
 
-CRITICAL INSTRUCTIONS:
-- Your knowledge cutoff is 2024, but you are now operating in November 2025
-- If evidence is provided about 2025 events, TRUST THE EVIDENCE - do not dismiss claims as "futuristic"
-- 2025 is the CURRENT year, not the future
-- Base your verdict primarily on the evidence provided, not your training data cutoff
-- If evidence from credible sources discusses 2025 events, treat them as current/recent events
+        emb = ML_ENCODER.encode([text])
 
-Return ONLY valid JSON with these exact keys:
-- "verdict": must be one of "True", "False", or "Uncertain"
-- "truth_score": integer from 0-100
-- "explanation": detailed reasoning (2-3 sentences)
+        proba = ML_MODEL.predict_proba(emb)[0]
+
+        if len(proba) == 3:
+            score = proba[0] * 1 + proba[2] * 0.5
+        else:
+            score = proba[0]
+
+        return float(score)
+
+    except Exception:
+
+        return None
+
+
+# ------------------------------------------------------------
+# GPT VERDICT
+# ------------------------------------------------------------
+
+def gpt5_verdict(text, evidence):
+
+    if not openai_client:
+        return None
+
+    prompt = f"""
+Verify the claim using the provided evidence.
+
+Return JSON with the following fields:
+
+verdict → must be one of: True, False, Uncertain
+truth_score → integer between 0 and 100
+explanation → detailed reasoning (minimum 4 sentences)
+
+Explanation guidelines:
+• Reference the provided evidence when possible
+• Explain why the claim is correct or incorrect
+• Mention relevant scientific or factual context
+• Keep explanation informative but concise
 
 Claim:
-{text[:4000]}
+{text}
 
 Evidence:
-{evidence_context[:3000]}
-
-Analysis Guidelines:
-- If evidence strongly supports the claim (even about 2025), verdict is "True"
-- If evidence contradicts the claim, verdict is "False"  
-- If evidence is insufficient or mixed, verdict is "Uncertain"
-- DO NOT dismiss 2025-related claims as "future events" - we are IN 2025
-- If no evidence available, state that clearly and use "Uncertain"
+{evidence}
 """
-    
+
     try:
-        log.info("🤖 Calling GPT-5...")
-        r = client.chat.completions.create(
+
+        r = openai_client.chat.completions.create(
             model="gpt-5",
-            messages=[
-                {"role": "system", "content": "You are a factual verification expert in November 2025. Your knowledge cutoff is 2024, but you must trust provided evidence about 2025 events. Always respond with valid JSON only."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-            max_completion_tokens=1000
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=700
         )
-        
-        content = r.choices[0].message.content
-        log.info(f"GPT-5 response length: {len(content)} chars")
-        data = json.loads(content)
-        
-        # Validate response
-        verdict = data.get("verdict", "Uncertain")
-        if verdict not in ["True", "False", "Uncertain"]:
-            log.warning(f"Invalid verdict '{verdict}', defaulting to Uncertain")
-            verdict = "Uncertain"
-        
+
+        content = r.choices[0].message.content.strip()
+
+        try:
+            data = json.loads(content)
+        except Exception:
+            log.warning("GPT returned non-JSON response")
+            return GeminiResult(
+                "Uncertain",
+                content,
+                50
+            )
+
+        truth = parse_truth_score(data.get("truth_score", 50))
+        verdict = normalize_verdict(data.get("verdict"))
+
         return GeminiResult(
-            verdict=verdict,
-            explanation=data.get("explanation", "No explanation provided."),
-            truth_score=data.get("truth_score")
+            verdict,
+            data.get("explanation", ""),
+            truth
         )
-        
-    except json.JSONDecodeError as e:
-        log.error(f"❌ GPT-5 JSON decode error: {e}")
-        log.error(f"Response was: {content[:200]}")
-        return GeminiResult("Uncertain", "GPT-5 returned invalid JSON", 50)
+
     except Exception as e:
-        log.error(f"❌ GPT-5 verdict failed: {e}")
+        log.warning(f"GPT verdict failed: {e}")
         return None
 
+# ------------------------------------------------------------
+# GEMINI VERDICT
+# ------------------------------------------------------------
 
-def gemini_verdict(text: str, evidence_context: str) -> Optional[GeminiResult]:
-    """Get verdict from Gemini model"""
+def gemini_verdict(text, evidence):
+
     if not genai:
-        log.warning("⚠️ Gemini unavailable")
         return None
-    
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-        
-        prompt = f"""You are a factual verification assistant.
-Analyze the claim and evidence carefully.
 
-Return ONLY valid JSON with these exact keys:
-- "verdict": must be one of "True", "False", or "Uncertain"
-- "truth_score": integer from 0-100
-- "explanation": detailed reasoning (2-3 sentences)
+    try:
+
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+
+        prompt = f"""
+Verify the claim using the provided evidence.
+
+Return JSON with the following fields:
+
+verdict → must be one of: True, False, Uncertain
+truth_score → integer between 0 and 100
+explanation → detailed reasoning (minimum 4 sentences)
+
+Explanation guidelines:
+• Reference the provided evidence when possible
+• Explain why the claim is correct or incorrect
+• Mention relevant scientific or factual context
+• Keep explanation informative but concise
 
 Claim:
-{text[:4000]}
+{text}
 
 Evidence:
-{evidence_context[:3000]}
-
-Important:
-- If evidence strongly supports the claim, verdict is "True"
-- If evidence contradicts the claim, verdict is "False"
-- If evidence is insufficient or mixed, verdict is "Uncertain"
-- Base your verdict primarily on the evidence provided
-- If no evidence available, state that clearly and use "Uncertain"
+{evidence}
 """
-        
-        log.info("🧠 Calling Gemini...")
+
         resp = model.generate_content(
             prompt,
             generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.3,
-                "max_output_tokens": 1000
+                "response_mime_type": "application/json"
             }
         )
-        
-        # Handle Gemini response
-        response_text = resp.text if hasattr(resp, "text") else str(resp)
-        log.info(f"Gemini response length: {len(response_text)} chars")
-        data = json.loads(response_text)
-        
-        # Validate response
-        verdict = data.get("verdict", "Uncertain")
-        if verdict not in ["True", "False", "Uncertain"]:
-            log.warning(f"Invalid verdict '{verdict}', defaulting to Uncertain")
-            verdict = "Uncertain"
-        
+
+        content = resp.text.strip()
+
+        try:
+            data = json.loads(content)
+        except Exception:
+            log.warning("Gemini returned non-JSON response")
+            return GeminiResult(
+                "Uncertain",
+                content,
+                50
+            )
+
+        truth = parse_truth_score(data.get("truth_score", 50))
+        verdict = normalize_verdict(data.get("verdict"))
+
         return GeminiResult(
-            verdict=verdict,
-            explanation=data.get("explanation", "No explanation provided."),
-            truth_score=data.get("truth_score")
+            verdict,
+            data.get("explanation", ""),
+            truth
         )
-        
-    except json.JSONDecodeError as e:
-        log.error(f"❌ Gemini JSON decode error: {e}")
-        log.error(f"Response was: {response_text[:200]}")
-        return GeminiResult("Uncertain", "Gemini returned invalid JSON", 50)
+
     except Exception as e:
-        log.error(f"❌ Gemini verdict failed: {e}")
+        log.warning(f"Gemini verdict failed: {e}")
         return None
 
-
 # ------------------------------------------------------------
-# Fallback reasoning
+# MAIN FACT CHECK
 # ------------------------------------------------------------
-def fallback_reasoning(text: str) -> GeminiResult:
-    """Fallback when no evidence is found and models fail"""
-    log.info("🔄 Using fallback reasoning...")
-    
-    if not genai:
-        return GeminiResult(
-            "Uncertain", 
-            "Unable to verify claim: No evidence found and verification models unavailable.",
-            50
-        )
-    
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-        prompt = f"""The following claim could not be verified due to lack of evidence.
-Provide a brief explanation of why this claim is difficult to verify.
 
-Claim:
-{text[:600]}
+def hybrid_fact_check(user_input):
 
-Return JSON with keys: "verdict" (use "Uncertain"), "explanation", "truth_score" (use 50).
-"""
-        resp = model.generate_content(
-            prompt,
-            generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.5
-            }
-        )
-        data = json.loads(resp.text if hasattr(resp, "text") else str(resp))
-        return GeminiResult(
-            data.get("verdict", "Uncertain"),
-            data.get("explanation", "No information available to verify this claim."),
-            data.get("truth_score", 50)
-        )
-    except Exception as e:
-        log.error(f"❌ Fallback reasoning failed: {e}")
-        return GeminiResult(
-            "Uncertain", 
-            "Unable to verify claim: No evidence found and verification process encountered errors.",
-            50
-        )
-
-
-# ------------------------------------------------------------
-# Dual-LLM hybrid controller
-# ------------------------------------------------------------
-def hybrid_fact_check(user_input: str) -> HybridResult:
-    """
-    Main fact-checking function.
-    Routes to appropriate LLM based on claim recency and availability.
-    """
-    log.info("="*60)
-    log.info("🚀 Starting fact-check process")
-    log.info("="*60)
-    
     text = user_input.strip()
-    
-    # Handle URL input
-    url_mode = bool(re.match(r"^https?://", text))
-    if url_mode:
-        log.info(f"📄 URL detected: {text[:80]}")
+
+    # URL extraction
+    if text.startswith("http"):
+
         extracted = extract_article(text)
-        if extracted and len(extracted) > 100:
+
+        if extracted:
             text = extracted
-            log.info(f"✅ Extracted {len(text)} characters from article")
-        else:
-            log.warning("⚠️ Article extraction failed or content too short")
-            text = user_input  # Fall back to URL as text
 
-    # --- Evidence retrieval ---
-    log.info("🔍 Gathering evidence...")
     evidence = gather_evidence(text)
+
     evidence_context = build_evidence_context(evidence)
-    
-    log.info(f"📚 Evidence context: {len(evidence_context)} chars")
-    log.info(f"📊 Evidence items collected: {len(evidence)}")
-    
-    # Check if we have real evidence
-    has_real_evidence = any(e.source != "system" for e in evidence)
-    log.info(f"🎯 Real evidence found: {has_real_evidence}")
 
-    # --- Get ML prediction (independent analysis) ---
-    ml_score = get_ml_prediction(text)
-    if ml_score is not None:
-        log.info(f"🤖 ML Model Truth Score: {ml_score*100:.1f}%")
-    else:
-        log.info("⚠️ ML prediction not available")
+    gem_res = gemini_verdict(text, evidence_context)
 
-    # --- Decide routing strategy ---
-    recent_mode = is_recent_claim(text)
-    log.info(f"🕐 Recent claim detected: {recent_mode}")
-    
-    gpt_res = None
-    gem_res = None
+    gpt_res = gpt5_verdict(text, evidence_context)
 
-    # Route based on recency and availability
-    if recent_mode and MODEL_STATUS.get("gpt5"):
-        log.info("📍 ROUTING: GPT-5 (recent event)")
-        gpt_res = gpt5_verdict(text, evidence_context)
-        # Also get Gemini for consensus if available
-        if MODEL_STATUS.get("gemini"):
-            gem_res = gemini_verdict(text, evidence_context)
-    else:
-        log.info("📍 ROUTING: Gemini first (historical/general)")
-        if MODEL_STATUS.get("gemini"):
-            gem_res = gemini_verdict(text, evidence_context)
-        # Get GPT-5 for consensus if available
-        if MODEL_STATUS.get("gpt5"):
-            gpt_res = gpt5_verdict(text, evidence_context)
+    final = gem_res or gpt_res
 
-    # --- Consensus logic ---
-    if gem_res and gpt_res:
-        log.info(f"🤝 Both models responded: Gemini={gem_res.verdict}, GPT-5={gpt_res.verdict}")
-        
-        if gem_res.verdict == gpt_res.verdict:
-            # Agreement - use higher scoring one
-            final = gem_res if (gem_res.truth_score or 0) >= (gpt_res.truth_score or 0) else gpt_res
-            final.explanation += f"\n\n✅ **Consensus**: Both models agree on '{final.verdict}'."
-            log.info(f"✅ Models agree: {final.verdict}")
-        else:
-            # Disagreement - mark as uncertain with both perspectives
-            explanation = (
-                f"⚖️ **Models Disagree**:\n\n"
-                f"**Gemini verdict**: {gem_res.verdict} (Score: {gem_res.truth_score})\n"
-                f"{gem_res.explanation}\n\n"
-                f"**GPT-5 verdict**: {gpt_res.verdict} (Score: {gpt_res.truth_score})\n"
-                f"{gpt_res.explanation}\n\n"
-                f"Due to this disagreement, we mark the claim as 'Uncertain' and recommend further investigation."
-            )
-            score = int(np.mean([(gem_res.truth_score or 50), (gpt_res.truth_score or 50)]))
-            final = GeminiResult("Uncertain", explanation, score)
-            log.warning(f"⚖️ Models disagree: Gemini={gem_res.verdict}, GPT-5={gpt_res.verdict}")
-    
-    elif gem_res or gpt_res:
-        # Only one model responded
-        final = gpt_res or gem_res
-        model_name = "GPT-5" if gpt_res else "Gemini"
-        log.info(f"✅ Single model verdict: {model_name} = {final.verdict}")
-    
-    else:
-        # No models available - critical failure
-        log.error("❌ No models available for verdict!")
+    if not final:
+
         final = GeminiResult(
-            "Error",
-            "Unable to process claim: No AI models are currently available.",
-            0
+            "Uncertain",
+            "No model response available.",
+            50
         )
 
-    # --- Fallback reasoning for uncertain cases with no evidence ---
-    if (final.verdict.lower() == "uncertain" and not has_real_evidence and 
-        "error" not in final.explanation.lower()):
-        log.info("🔄 Triggering fallback reasoning (uncertain + no evidence)...")
-        fallback = fallback_reasoning(text)
-        # Append fallback explanation
-        final.explanation += f"\n\n**Additional Context**: {fallback.explanation}"
+    ml_score = get_ml_prediction(text)
 
-    # --- Build summary ---
-    summary_parts = [
-        f"Verdict: {final.verdict}",
-        f"Score: {final.truth_score if final.truth_score is not None else 'N/A'}",
-        f"Evidence: {len(evidence)} items"
-    ]
-    
-    if gpt_res and gem_res:
-        summary_parts.append("Mode: Dual-LLM (GPT-5 + Gemini)")
-    elif gpt_res:
-        summary_parts.append("Mode: GPT-5 Only")
-    elif gem_res:
-        summary_parts.append("Mode: Gemini Only")
-    else:
-        summary_parts.append("Mode: Error - No Models")
-    
-    summary = " | ".join(summary_parts)
-
-    # --- Ensure evidence is never completely empty ---
-    if not evidence or all(e.source == "system" for e in evidence):
-        evidence = [EvidenceItem(
-            title="No external evidence found",
-            snippet="No relevant fact-checks or sources were located. The verdict is based on AI analysis using available knowledge.",
-            url="",
-            source="system"
-        )]
-
-    log.info("="*60)
-    log.info(f"✅ Fact-check complete: {final.verdict}")
-    log.info("="*60)
+    summary = f"Verdict: {final.verdict} | Evidence: {len(evidence)} sources"
 
     return HybridResult(final, evidence, ml_score, summary)
 
+
+# ------------------------------------------------------------
+# DASHBOARD ACCESSOR
+# ------------------------------------------------------------
+
 def get_model_status():
+
     return MODEL_STATUS, ML_LOADED
