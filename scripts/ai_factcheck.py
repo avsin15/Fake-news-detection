@@ -580,3 +580,6 @@ def hybrid_fact_check(user_input: str) -> HybridResult:
     log.info("="*60)
 
     return HybridResult(final, evidence, ml_score, summary)
+
+def get_model_status():
+    return MODEL_STATUS, ML_LOADED
