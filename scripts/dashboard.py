@@ -7,8 +7,7 @@ Interactive dashboard for Dual-LLM Hybrid Fact-Checker (GPT-5 + Gemini + XGBoost
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from ai_factcheck import hybrid_fact_check, get_model_status
-MODEL_STATUS, ML_LOADED = get_model_status()
+from ai_factcheck import hybrid_fact_check, MODEL_STATUS, ML_LOADED
 
 st.set_page_config(
     page_title="AI Fact-Checker Dashboard", 
@@ -55,10 +54,8 @@ st.markdown("""
 # Initialize session state
 if "check_count" not in st.session_state:
     st.session_state.check_count = 0
-if "selected_example" not in st.session_state:
-    st.session_state.selected_example = ""
-if "user_claim" not in st.session_state:
-    st.session_state.user_claim = ""
+if "user_input_field" not in st.session_state:
+    st.session_state.user_input_field = ""
 
 # Header
 st.markdown('<div class="main-header">🧠 AI Fact-Checker</div>', unsafe_allow_html=True)
@@ -139,24 +136,16 @@ with st.expander("💡 Try Example Claims"):
     for i, example in enumerate(examples):
         with cols[i % 2]:
             if st.button(f"📌 {example}", key=f"example_{i}", use_container_width=True):
-                st.session_state.selected_example = example
-                st.session_state.user_claim = example
+                st.session_state.user_input_field = example
+                st.rerun()
 
-# Use selected example as default value
-default_text = st.session_state.get("selected_example", "")
-
-# Single unified input
+# Single unified input — keyed to session state, example buttons write directly to this key
 user_input = st.text_area(
     "Enter a claim or paste a URL:",
-    value=default_text,
     placeholder="Example: 'Climate change caused record temperatures in 2024' or 'https://example.com/article'",
     height=120,
     key="user_input_field"
 )
-
-# Clear the selected example after using it
-if st.session_state.get("selected_example"):
-    st.session_state.selected_example = ""
 
 st.markdown("---")
 
