@@ -129,7 +129,7 @@ with st.expander("💡 Try Example Claims"):
         "COVID-19 vaccines contain microchips",
         "Climate change is causing more extreme weather events",
         "Water boils at 100 degrees Celsius at sea level",
-        "The 2024 Olympics were held in Paris"
+        "The 2012 Olympics were held in Paris"
     ]
     
     cols = st.columns(2)
