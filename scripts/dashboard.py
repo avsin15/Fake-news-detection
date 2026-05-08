@@ -303,14 +303,14 @@ if analyze_button:
                 # Visualization
                 if result.gemini.truth_score is not None or result.ml_score is not None:
                     st.markdown("---")
-                    st.markdown("### 🎯 Truth Score Comparison")
+                    st.markdown("###  Truth Score Comparison")
                     
                     # Create dual gauge if both scores available
                     if result.gemini.truth_score is not None and result.ml_score is not None:
                         col_g1, col_g2 = st.columns(2)
                         
                         with col_g1:
-                            st.markdown("#### 🧠 LLM Truth Score")
+                            st.markdown("#### LLM Truth Score")
                             fig1 = go.Figure(go.Indicator(
                                 mode="gauge+number",
                                 value=result.gemini.truth_score,
@@ -334,7 +334,7 @@ if analyze_button:
                             st.plotly_chart(fig1, use_container_width=True)
                         
                         with col_g2:
-                            st.markdown("#### 🤖 ML Truth Score")
+                            st.markdown("#### ML Truth Score")
                             ml_percentage = int(result.ml_score * 100)
                             ml_color_gauge = "#28a745" if ml_percentage > 75 else "#ffc107" if ml_percentage > 40 else "#dc3545"
                             
