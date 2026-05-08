@@ -58,9 +58,9 @@ if "user_input_field" not in st.session_state:
     st.session_state.user_input_field = ""
 
 # Header
-st.markdown('<div class="main-header">🧠 AI Fact-Checker</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"> AI Fact-Checker</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-header">Powered by GPT-5 + Gemini 2.0 Flash + XGBoost ML | Adaptive Evidence-Based Verification</div>', 
+    '<div class="sub-header">Powered by GPT-5 + Gemini 2.5 Flash + XGBoost ML | Adaptive Evidence-Based Verification</div>', 
     unsafe_allow_html=True
 )
 
@@ -70,7 +70,7 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     if MODEL_STATUS.get("gemini"):
-        st.success("✅ **Gemini 2.0 Flash** Connected")
+        st.success("✅ **Gemini 2.5 Flash** Connected")
     else:
         st.error("❌ **Gemini** Not Connected")
 
