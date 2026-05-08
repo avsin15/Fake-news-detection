@@ -11,7 +11,7 @@ from ai_factcheck import hybrid_fact_check, MODEL_STATUS, ML_LOADED
 
 st.set_page_config(
     page_title="AI Fact-Checker Dashboard", 
-    page_icon="🧠", 
+    page_icon="", 
     layout="wide"
 )
 
@@ -409,15 +409,3 @@ if analyze_button:
                 st.error(f"🚨 **Error during analysis**: {str(e)}")
                 with st.expander("Show Full Error Details"):
                     st.exception(e)
-
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #666; padding: 2rem;'>
-    Built with ❤️ using Streamlit | Powered by GPT-5, Gemini & XGBoost<br>
-    <small>⚠️ This tool is for educational purposes. Always verify critical information from multiple sources.</small>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
