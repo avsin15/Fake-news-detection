@@ -152,7 +152,7 @@ st.markdown("---")
 # --- Analysis Button ---
 col_left, col_center, col_right = st.columns([1, 2, 1])
 with col_center:
-    analyze_button = st.button("🔍 Analyze Claim", type="primary", use_container_width=True)
+    analyze_button = st.button("🔍 Analyse Claim", type="primary", use_container_width=True)
 
 # --- Analysis Logic ---
 if analyze_button:
